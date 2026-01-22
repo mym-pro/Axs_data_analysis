@@ -1,0 +1,8 @@
+streamlit>=1.28.0
+pandas>=2.0.0
+numpy>=1.24.0
+plotly>=5.17.0
+PyGithub>=2.1.1
+openpyxl>=3.1.0  # 用于读取Excel文件
+xlrd>=2.0.0      # 用于读取旧版Excel文件
+python-dotenv>=1.0.0  # 用于本地环境变量管理
