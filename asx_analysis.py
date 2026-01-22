@@ -7,10 +7,6 @@ from plotly.subplots import make_subplots
 import json
 from datetime import datetime, timedelta
 import io
-from pathlib import Path
-import sys
-from github import Github, GithubException
-import base64
 import tempfile
 import os
 
@@ -22,204 +18,39 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-class GitHubDataManager:
-    """GitHub数据管理器"""
+class DataManager:
+    """数据管理器 - 处理用户上传的数据"""
     
     def __init__(self):
-        """初始化GitHub连接"""
+        """初始化数据管理器"""
+        self.data = None
+        self.commodity_hierarchy = None
+        self.commodity_mapping = None
+        
+    def load_data_from_upload(self, uploaded_file):
+        """从上传的文件加载数据"""
         try:
-            # 从Streamlit secrets获取GitHub配置
-            self.github_token = st.secrets["github"]["token"]
-            self.repo_owner = st.secrets["github"]["repo_owner"]
-            self.repo_name = st.secrets["github"]["repo_name"]
-            
-            # 数据文件路径（从secrets获取，如果没有则使用默认值）
-            self.data_path = st.secrets["github"].get("data_path", "data/axs_data.csv")
-            self.commodity_hierarchy_path = st.secrets["github"].get(
-                "commodity_hierarchy_path", 
-                "data/commodity_hierarchy.json"
-            )
-            
-            # 初始化GitHub客户端
-            self.g = Github(self.github_token)
-            self.repo = self.g.get_repo(f"{self.repo_owner}/{self.repo_name}")
-            
-            st.success(f"成功连接到GitHub仓库: {self.repo_owner}/{self.repo_name}")
-            
-        except Exception as e:
-            st.error(f"GitHub连接失败: {str(e)}")
-            st.info("请确保在Streamlit secrets中正确配置了GitHub凭据")
-            raise
-    
-    def download_json_file(self, file_path):
-        """从GitHub下载JSON文件"""
-        try:
-            # 获取文件内容
-            file_content = self.repo.get_contents(file_path)
-            
-            # 解码内容
-            content = base64.b64decode(file_content.content).decode('utf-8')
-            
-            # 解析JSON
-            json_data = json.loads(content)
-            
-            return json_data
-            
-        except Exception as e:
-            st.error(f"下载JSON文件失败 {file_path}: {str(e)}")
-            return None
-    
-    def upload_json_file(self, json_data, file_path, commit_message="更新JSON文件"):
-        """上传JSON文件到GitHub"""
-        try:
-            # 将JSON数据转换为字符串
-            json_content = json.dumps(json_data, indent=2, ensure_ascii=False)
-            
-            # 编码内容
-            encoded_content = base64.b64encode(json_content.encode()).decode()
-            
-            # 检查文件是否已存在
-            try:
-                # 尝试获取现有文件
-                file_content = self.repo.get_contents(file_path)
-                
-                # 更新现有文件
-                self.repo.update_file(
-                    path=file_path,
-                    message=commit_message,
-                    content=encoded_content,
-                    sha=file_content.sha
-                )
-                st.success(f"已更新GitHub上的文件: {file_path}")
-                
-            except GithubException as e:
-                if e.status == 404:
-                    # 文件不存在，创建新文件
-                    self.repo.create_file(
-                        path=file_path,
-                        message=commit_message,
-                        content=encoded_content
-                    )
-                    st.success(f"已在GitHub上创建文件: {file_path}")
-                else:
-                    raise
-            
-            return True
-            
-        except Exception as e:
-            st.error(f"上传JSON文件到GitHub失败: {str(e)}")
-            return False
-    
-    def download_data(self):
-        """从GitHub下载数据"""
-        try:
-            # 获取文件内容
-            file_content = self.repo.get_contents(self.data_path)
-            
-            # 如果是CSV文件
-            if self.data_path.endswith('.csv'):
-                # 解码内容
-                content = base64.b64decode(file_content.content).decode('utf-8')
-                # 创建临时文件
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, encoding='utf-8') as f:
-                    f.write(content)
-                    temp_path = f.name
-                
-                # 读取CSV
-                df = pd.read_csv(temp_path)
-                
-                # 清理临时文件
-                os.unlink(temp_path)
-                
-                return df
-            
-            # 如果是Excel文件
-            elif self.data_path.endswith('.xlsx'):
-                # 解码内容
-                content = base64.b64decode(file_content.content)
-                # 创建临时文件
-                with tempfile.NamedTemporaryFile(mode='wb', suffix='.xlsx', delete=False) as f:
-                    f.write(content)
-                    temp_path = f.name
-                
-                # 读取Excel
-                df = pd.read_excel(temp_path)
-                
-                # 清理临时文件
-                os.unlink(temp_path)
-                
-                return df
+            # 根据文件类型读取数据
+            if uploaded_file.name.endswith('.csv'):
+                # 对于CSV文件，我们可以分块读取或直接读取
+                df = pd.read_csv(uploaded_file)
+            elif uploaded_file.name.endswith('.xlsx'):
+                df = pd.read_excel(uploaded_file)
+            elif uploaded_file.name.endswith('.parquet'):
+                df = pd.read_parquet(uploaded_file)
             else:
-                st.error(f"不支持的文件格式: {self.data_path}")
+                st.error(f"不支持的文件格式: {uploaded_file.name}")
                 return None
-                
+            
+            st.success(f"成功加载数据，共 {len(df):,} 条记录")
+            return df
+            
         except Exception as e:
-            st.error(f"下载数据失败: {str(e)}")
+            st.error(f"数据加载失败: {str(e)}")
             return None
     
-    def upload_data(self, df, commit_message="更新数据"):
-        """上传数据到GitHub"""
-        try:
-            # 将DataFrame转换为CSV字符串
-            csv_content = df.to_csv(index=False)
-            
-            # 编码内容
-            encoded_content = base64.b64encode(csv_content.encode()).decode()
-            
-            # 检查文件是否已存在
-            try:
-                # 尝试获取现有文件
-                file_content = self.repo.get_contents(self.data_path)
-                
-                # 更新现有文件
-                self.repo.update_file(
-                    path=self.data_path,
-                    message=commit_message,
-                    content=encoded_content,
-                    sha=file_content.sha
-                )
-                st.success(f"已更新GitHub上的数据文件: {self.data_path}")
-                
-            except GithubException as e:
-                if e.status == 404:
-                    # 文件不存在，创建新文件
-                    self.repo.create_file(
-                        path=self.data_path,
-                        message=commit_message,
-                        content=encoded_content
-                    )
-                    st.success(f"已在GitHub上创建数据文件: {self.data_path}")
-                else:
-                    raise
-            
-            return True
-            
-        except Exception as e:
-            st.error(f"上传数据到GitHub失败: {str(e)}")
-            return False
-    
-    def load_commodity_hierarchy(self):
-        """从GitHub加载商品分类层级结构"""
-        try:
-            # 尝试从GitHub加载商品分类
-            with st.spinner("正在加载商品分类结构..."):
-                commodity_hierarchy = self.download_json_file(self.commodity_hierarchy_path)
-            
-            if commodity_hierarchy:
-                st.success("商品分类结构加载成功")
-                return commodity_hierarchy
-            else:
-                # 如果GitHub加载失败，使用默认结构
-                st.warning("从GitHub加载商品分类失败，使用默认分类结构")
-                return self.get_default_commodity_hierarchy()
-                
-        except Exception as e:
-            st.error(f"加载商品分类结构失败: {str(e)}")
-            # 使用默认结构作为后备
-            return self.get_default_commodity_hierarchy()
-    
-    def get_default_commodity_hierarchy(self):
-        """获取默认的商品分类结构（作为后备方案）"""
+    def load_default_commodity_hierarchy(self):
+        """获取默认的商品分类结构"""
         return {
             "Major Bulks": {
                 "Iron Ore": ["Iron Ore", "Iron Ore Pellets"],
@@ -232,18 +63,26 @@ class GitHubDataManager:
             }
         }
     
-    def save_commodity_hierarchy(self, commodity_hierarchy, commit_message="更新商品分类结构"):
-        """保存商品分类结构到GitHub"""
+    def save_commodity_hierarchy_to_file(self, commodity_hierarchy):
+        """保存商品分类结构到临时文件"""
         try:
-            success = self.upload_json_file(
-                commodity_hierarchy, 
-                self.commodity_hierarchy_path, 
-                commit_message
-            )
-            return success
+            # 创建临时文件
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as f:
+                json.dump(commodity_hierarchy, f, indent=2, ensure_ascii=False)
+                temp_path = f.name
+            
+            # 提供下载
+            with open(temp_path, 'r', encoding='utf-8') as f:
+                json_content = f.read()
+            
+            # 清理临时文件
+            os.unlink(temp_path)
+            
+            return json_content
+            
         except Exception as e:
             st.error(f"保存商品分类结构失败: {str(e)}")
-            return False
+            return None
 
 # 构建商品到层级的映射
 def build_commodity_mapping(hierarchy):
@@ -352,31 +191,23 @@ def check_and_generate_fields(df, commodity_mapping):
     
     return df, modified
 
-@st.cache_data(ttl=3600)
-def load_and_process_data(github_manager, commodity_mapping):
-    """从GitHub加载并处理数据"""
+@st.cache_data(ttl=86400)  # 缓存24小时
+def process_uploaded_data(uploaded_file, commodity_mapping):
+    """处理上传的数据"""
     try:
-        # 从GitHub下载数据
-        with st.spinner("正在从GitHub下载数据..."):
-            df = github_manager.download_data()
+        # 初始化数据管理器
+        data_manager = DataManager()
+        
+        # 加载数据
+        with st.spinner("正在加载数据..."):
+            df = data_manager.load_data_from_upload(uploaded_file)
         
         if df is None:
-            st.error("无法从GitHub下载数据")
             return None
         
-        st.success(f"成功加载数据，共 {len(df):,} 条记录")
-        
         # 检查并生成缺失字段
-        with st.spinner("检查并生成数据字段..."):
+        with st.spinner("处理数据字段..."):
             df, modified = check_and_generate_fields(df, commodity_mapping)
-        
-        # 如果需要，保存回GitHub
-        if modified:
-            with st.spinner("保存更新到GitHub..."):
-                if github_manager.upload_data(df, "自动生成缺失字段"):
-                    st.success("数据已保存回GitHub")
-                else:
-                    st.warning("数据已处理，但保存到GitHub失败")
         
         return df
     
@@ -384,25 +215,46 @@ def load_and_process_data(github_manager, commodity_mapping):
         st.error(f"数据处理错误: {str(e)}")
         return None
 
+@st.cache_data(ttl=86400)  # 缓存24小时
+def get_filtered_data(df, filters):
+    """根据筛选条件获取数据（带缓存）"""
+    filtered_df = df.copy()
+    
+    # 应用筛选条件
+    if filters.get('vessel_type'):
+        filtered_df = filtered_df[filtered_df['vessel_dwt_type'].isin(filters['vessel_type'])]
+    
+    if filters.get('commodity_level1'):
+        filtered_df = filtered_df[filtered_df['commodity_type_1level'].isin(filters['commodity_level1'])]
+    
+    if filters.get('commodity_level2'):
+        filtered_df = filtered_df[filtered_df['commodity_type_2level'].isin(filters['commodity_level2'])]
+    
+    if filters.get('commodity_level3'):
+        filtered_df = filtered_df[filtered_df['commodity_type_3level'].isin(filters['commodity_level3'])]
+    
+    if filters.get('date_range') and len(filters['date_range']) == 2 and 'load_end_date' in filtered_df.columns:
+        start_date, end_date = filters['date_range']
+        filtered_df = filtered_df[(filtered_df['load_end_date'] >= pd.Timestamp(start_date)) & 
+                                  (filtered_df['load_end_date'] <= pd.Timestamp(end_date))]
+    
+    return filtered_df
+
 def create_trade_flow_charts(df, vessel_type=None, commodity_level1=None, 
                              commodity_level2=None, commodity_level3=None,
                              analysis_type="overall"):
     """创建贸易流柱状图"""
     
-    # 筛选数据
-    filtered_df = df.copy()
+    # 准备筛选条件
+    filters = {
+        'vessel_type': vessel_type,
+        'commodity_level1': commodity_level1,
+        'commodity_level2': commodity_level2,
+        'commodity_level3': commodity_level3
+    }
     
-    if vessel_type:
-        filtered_df = filtered_df[filtered_df['vessel_dwt_type'].isin(vessel_type)]
-    
-    if commodity_level1:
-        filtered_df = filtered_df[filtered_df['commodity_type_1level'].isin(commodity_level1)]
-    
-    if commodity_level2:
-        filtered_df = filtered_df[filtered_df['commodity_type_2level'].isin(commodity_level2)]
-    
-    if commodity_level3:
-        filtered_df = filtered_df[filtered_df['commodity_type_3level'].isin(commodity_level3)]
+    # 使用缓存的筛选函数
+    filtered_df = get_filtered_data(df, filters)
     
     if filtered_df.empty:
         st.warning("筛选条件没有匹配的数据")
@@ -594,40 +446,32 @@ def create_trade_flow_charts(df, vessel_type=None, commodity_level1=None,
                 
                 st.plotly_chart(fig, use_container_width=True)
 
+@st.cache_data(ttl=3600)  # 缓存1小时
 def create_time_series_charts(df, vessel_type=None, commodity_level1=None, 
                               commodity_level2=None, commodity_level3=None,
                               location_type="load_zone", selected_locations=None,
                               date_range=None):
     """创建时间序列图"""
     
-    # 筛选数据
-    filtered_df = df.copy()
+    # 准备筛选条件
+    filters = {
+        'vessel_type': vessel_type,
+        'commodity_level1': commodity_level1,
+        'commodity_level2': commodity_level2,
+        'commodity_level3': commodity_level3,
+        'date_range': date_range
+    }
     
-    if vessel_type:
-        filtered_df = filtered_df[filtered_df['vessel_dwt_type'].isin(vessel_type)]
-    
-    if commodity_level1:
-        filtered_df = filtered_df[filtered_df['commodity_type_1level'].isin(commodity_level1)]
-    
-    if commodity_level2:
-        filtered_df = filtered_df[filtered_df['commodity_type_2level'].isin(commodity_level2)]
-    
-    if commodity_level3:
-        filtered_df = filtered_df[filtered_df['commodity_type_3level'].isin(commodity_level3)]
-    
-    # 按日期筛选
-    if date_range and len(date_range) == 2:
-        start_date, end_date = date_range
-        filtered_df = filtered_df[(filtered_df['load_end_date'] >= start_date) & 
-                                  (filtered_df['load_end_date'] <= end_date)]
-    
-    if filtered_df.empty:
-        st.warning("筛选条件没有匹配的数据")
-        return
+    # 使用缓存的筛选函数
+    filtered_df = get_filtered_data(df, filters)
     
     # 按位置筛选
     if selected_locations and location_type in filtered_df.columns:
         filtered_df = filtered_df[filtered_df[location_type].isin(selected_locations)]
+    
+    if filtered_df.empty:
+        st.warning("筛选条件没有匹配的数据")
+        return None
     
     # 按时间聚合（月度）
     filtered_df['Month_Year'] = filtered_df['load_end_date'].dt.to_period('M').astype(str)
@@ -669,38 +513,30 @@ def create_time_series_charts(df, vessel_type=None, commodity_level1=None,
         hovermode='x unified'
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    return fig
 
+@st.cache_data(ttl=3600)  # 缓存1小时
 def create_seasonal_charts(df, vessel_type=None, commodity_level1=None, 
                            commodity_level2=None, commodity_level3=None,
                            location_type=None, selected_locations=None,
                            date_range=None):
     """创建季节性规律图表"""
     
-    # 筛选数据
-    filtered_df = df.copy()
+    # 准备筛选条件
+    filters = {
+        'vessel_type': vessel_type,
+        'commodity_level1': commodity_level1,
+        'commodity_level2': commodity_level2,
+        'commodity_level3': commodity_level3,
+        'date_range': date_range
+    }
     
-    if vessel_type:
-        filtered_df = filtered_df[filtered_df['vessel_dwt_type'].isin(vessel_type)]
-    
-    if commodity_level1:
-        filtered_df = filtered_df[filtered_df['commodity_type_1level'].isin(commodity_level1)]
-    
-    if commodity_level2:
-        filtered_df = filtered_df[filtered_df['commodity_type_2level'].isin(commodity_level2)]
-    
-    if commodity_level3:
-        filtered_df = filtered_df[filtered_df['commodity_type_3level'].isin(commodity_level3)]
-    
-    # 按日期筛选
-    if date_range and len(date_range) == 2:
-        start_date, end_date = date_range
-        filtered_df = filtered_df[(filtered_df['load_end_date'] >= start_date) & 
-                                  (filtered_df['load_end_date'] <= end_date)]
+    # 使用缓存的筛选函数
+    filtered_df = get_filtered_data(df, filters)
     
     if filtered_df.empty:
         st.warning("筛选条件没有匹配的数据")
-        return
+        return None
     
     # 提取月份
     filtered_df['Month_Num'] = filtered_df['load_end_date'].dt.month
@@ -755,7 +591,7 @@ def create_seasonal_charts(df, vessel_type=None, commodity_level1=None,
         height=500
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    return fig
 
 def edit_commodity_hierarchy(commodity_hierarchy):
     """编辑商品分类层级结构"""
@@ -771,19 +607,24 @@ def edit_commodity_hierarchy(commodity_hierarchy):
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("📥 下载当前结构为JSON"):
-            # 提供JSON文件下载
-            json_str = json.dumps(commodity_hierarchy, indent=2, ensure_ascii=False)
+        # 提供JSON文件下载
+        data_manager = DataManager()
+        json_content = data_manager.save_commodity_hierarchy_to_file(commodity_hierarchy)
+        if json_content:
             st.download_button(
-                label="下载JSON文件",
-                data=json_str,
+                label="📥 下载当前结构",
+                data=json_content,
                 file_name="commodity_hierarchy.json",
                 mime="application/json"
             )
     
     with col2:
-        if st.button("🔄 重新加载结构"):
-            st.cache_data.clear()
+        if st.button("🔄 重置为默认结构"):
+            data_manager = DataManager()
+            default_hierarchy = data_manager.load_default_commodity_hierarchy()
+            st.session_state.commodity_hierarchy = default_hierarchy
+            st.session_state.commodity_mapping = build_commodity_mapping(default_hierarchy)
+            st.success("已重置为默认商品分类结构")
             st.rerun()
     
     with col3:
@@ -796,8 +637,11 @@ def edit_commodity_hierarchy(commodity_hierarchy):
                 st.write("新结构预览:")
                 st.json(new_hierarchy)
                 
-                if st.button("💾 保存新结构到GitHub"):
-                    return new_hierarchy
+                if st.button("💾 保存新结构"):
+                    st.session_state.commodity_hierarchy = new_hierarchy
+                    st.session_state.commodity_mapping = build_commodity_mapping(new_hierarchy)
+                    st.success("商品分类结构已更新！")
+                    st.rerun()
             except Exception as e:
                 st.error(f"JSON文件解析失败: {str(e)}")
     
@@ -809,386 +653,400 @@ def main():
     st.title("🚢 AXS 海运数据分析平台")
     st.markdown("---")
     
-    # 检查是否配置了GitHub secrets
-    if "github" not in st.secrets:
-        st.error("请在Streamlit Cloud secrets中配置GitHub凭据")
-        st.info("""
-        请添加以下配置到Streamlit Cloud secrets:
-        
-        [github]
-        token = "your_github_token"
-        repo_owner = "your_username"
-        repo_name = "your_repository"
-        data_path = "path/to/your/data.csv"  # 可选，默认为data/axs_data.csv
-        commodity_hierarchy_path = "path/to/commodity_hierarchy.json"  # 可选，默认为data/commodity_hierarchy.json
-        """)
-        return
+    # 初始化session state
+    if 'data_loaded' not in st.session_state:
+        st.session_state.data_loaded = False
+    if 'current_data' not in st.session_state:
+        st.session_state.current_data = None
     
-    try:
-        # 初始化GitHub数据管理器
-        github_manager = GitHubDataManager()
+    # 创建标签页
+    tab1, tab2 = st.tabs([
+        "📊 数据分析仪表板", 
+        "⚙️ 商品分类管理"
+    ])
+    
+    with tab2:
+        # 商品分类管理页面
+        st.header("商品分类层级结构管理")
         
-        # 创建标签页
-        tab1, tab2 = st.tabs([
-            "📊 数据分析仪表板", 
-            "⚙️ 商品分类管理"
-        ])
+        # 初始化商品分类结构
+        if 'commodity_hierarchy' not in st.session_state:
+            data_manager = DataManager()
+            default_hierarchy = data_manager.load_default_commodity_hierarchy()
+            st.session_state.commodity_hierarchy = default_hierarchy
+            st.session_state.commodity_mapping = build_commodity_mapping(default_hierarchy)
         
-        with tab2:
-            # 商品分类管理页面
-            st.header("商品分类层级结构管理")
-            
-            # 从GitHub加载商品分类结构
-            commodity_hierarchy = github_manager.load_commodity_hierarchy()
-            
-            # 构建商品映射
-            commodity_mapping = build_commodity_mapping(commodity_hierarchy)
-            
-            # 编辑功能
-            new_hierarchy = edit_commodity_hierarchy(commodity_hierarchy)
-            
-            if new_hierarchy:
-                # 保存新结构到GitHub
-                if github_manager.save_commodity_hierarchy(new_hierarchy, "更新商品分类结构"):
-                    st.success("商品分类结构已更新！")
-                    st.cache_data.clear()
-                    st.rerun()
-            
-            # 显示映射统计信息
-            st.subheader("商品映射统计")
-            st.write(f"已映射的商品数量: {len(commodity_mapping)}")
+        # 编辑功能
+        edit_commodity_hierarchy(st.session_state.commodity_hierarchy)
+        
+        # 显示映射统计信息
+        st.subheader("商品映射统计")
+        if st.session_state.commodity_mapping:
+            st.write(f"已映射的商品数量: {len(st.session_state.commodity_mapping)}")
             
             # 显示映射示例
             with st.expander("查看商品映射示例"):
-                sample_items = list(commodity_mapping.items())[:10]
+                sample_items = list(st.session_state.commodity_mapping.items())[:10]
                 for commodity, levels in sample_items:
                     st.write(f"**{commodity}** → 一级: {levels[0]}, 二级: {levels[1]}, 三级: {levels[2]}")
-        
-        with tab1:
-            # 数据分析页面
-            st.header("数据分析仪表板")
-            
-            # 从GitHub加载商品分类结构（如果还没加载）
-            if 'commodity_hierarchy' not in st.session_state:
-                with st.spinner("正在加载商品分类结构..."):
-                    commodity_hierarchy = github_manager.load_commodity_hierarchy()
-                    commodity_mapping = build_commodity_mapping(commodity_hierarchy)
-                    st.session_state.commodity_hierarchy = commodity_hierarchy
-                    st.session_state.commodity_mapping = commodity_mapping
-            else:
-                commodity_hierarchy = st.session_state.commodity_hierarchy
-                commodity_mapping = st.session_state.commodity_mapping
-            
-            # 加载数据
-            df = load_and_process_data(github_manager, commodity_mapping)
-            
-            if df is None:
-                return
-            
-            # 侧边栏 - 数据筛选
-            with st.sidebar:
-                st.header("数据概览")
-                st.write(f"总记录数: {len(df):,}")
-                
-                if 'load_end_date' in df.columns:
-                    min_date = df['load_end_date'].min()
-                    max_date = df['load_end_date'].max()
-                    st.write(f"数据时间范围: {min_date.date()} 至 {max_date.date()}")
-                
-                st.write(f"船舶类型数量: {df['vessel_dwt_type'].nunique()}")
-                st.write(f"商品一级分类: {df['commodity_type_1level'].nunique()}")
-                
-                st.markdown("---")
-                st.header("筛选条件")
-                
-                # 船舶类型选择
-                vessel_options = sorted(df['vessel_dwt_type'].dropna().unique().tolist())
-                selected_vessel_types = st.multiselect(
-                    "选择船舶类型",
-                    options=vessel_options,
-                    default=None,
-                    help="可多选"
-                )
-                
-                # 商品分类选择（联动）
-                st.subheader("商品分类筛选")
-                
-                commodity_level1_options = sorted(df['commodity_type_1level'].dropna().unique().tolist())
-                selected_level1 = st.multiselect(
-                    "商品一级分类",
-                    options=commodity_level1_options,
-                    default=None
-                )
-                
-                if selected_level1:
-                    level2_options = sorted(df[df['commodity_type_1level'].isin(selected_level1)]['commodity_type_2level'].dropna().unique().tolist())
-                    selected_level2 = st.multiselect(
-                        "商品二级分类",
-                        options=level2_options,
-                        default=None
-                    )
-                else:
-                    selected_level2 = None
-                
-                if selected_level2:
-                    level3_options = sorted(df[df['commodity_type_2level'].isin(selected_level2)]['commodity_type_3level'].dropna().unique().tolist())
-                    selected_level3 = st.multiselect(
-                        "商品三级分类",
-                        options=level3_options,
-                        default=None
-                    )
-                else:
-                    selected_level3 = None
-                
-                # 区域选择
-                st.subheader("区域选择")
-                
-                load_zone_options = sorted(df['load_zone'].dropna().unique().tolist())
-                discharge_zone_options = sorted(df['discharge_zone'].dropna().unique().tolist())
-                load_country_options = sorted(df['load_country'].dropna().unique().tolist())
-                discharge_country_options = sorted(df['discharge_country'].dropna().unique().tolist())
-                
-                selected_load_zones = st.multiselect(
-                    "装货区域",
-                    options=load_zone_options,
-                    default=None
-                )
-                
-                selected_discharge_zones = st.multiselect(
-                    "卸货区域",
-                    options=discharge_zone_options,
-                    default=None
-                )
-                
-                selected_load_countries = st.multiselect(
-                    "装货国家",
-                    options=load_country_options,
-                    default=None
-                )
-                
-                selected_discharge_countries = st.multiselect(
-                    "卸货国家",
-                    options=discharge_country_options,
-                    default=None
-                )
-                
-                # 时间范围选择
-                st.subheader("时间范围")
-                
-                if 'load_end_date' in df.columns:
-                    min_date = df['load_end_date'].min()
-                    max_date = df['load_end_date'].max()
-                    
-                    date_range = st.date_input(
-                        "选择时间范围",
-                        value=[min_date, max_date],
-                        min_value=min_date,
-                        max_value=max_date
-                    )
-                else:
-                    date_range = None
-                
-                st.markdown("---")
-                
-                # 手动刷新数据按钮
-                if st.button("🔄 重新加载数据"):
-                    st.cache_data.clear()
-                    st.rerun()
-            
-            # 创建分析标签页
-            analysis_tab1, analysis_tab2, analysis_tab3 = st.tabs([
-                "📊 贸易流分析", 
-                "📈 时间序列分析", 
-                "🌊 季节性分析"
-            ])
-            
-            with analysis_tab1:
-                st.header("贸易流分析")
-                
-                analysis_type = st.radio(
-                    "选择分析类型",
-                    ["总体分析", "装货分析", "卸货分析"],
-                    horizontal=True
-                )
-                
-                if analysis_type == "总体分析":
-                    create_trade_flow_charts(
-                        df,
-                        vessel_type=selected_vessel_types,
-                        commodity_level1=selected_level1,
-                        commodity_level2=selected_level2,
-                        commodity_level3=selected_level3,
-                        analysis_type="overall"
-                    )
-                elif analysis_type == "装货分析":
-                    # 选择装货区域
-                    st.subheader("选择装货区域进行分析")
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        use_load_zone = st.checkbox("按装货区域分析", value=True)
-                        if use_load_zone:
-                            selected_for_analysis = selected_load_zones
-                            location_type = "load_zone"
-                    
-                    with col2:
-                        use_load_country = st.checkbox("按装货国家分析")
-                        if use_load_country:
-                            selected_for_analysis = selected_load_countries
-                            location_type = "load_country"
-                    
-                    if (use_load_zone or use_load_country) and selected_for_analysis:
-                        if use_load_zone:
-                            create_trade_flow_charts(
-                                df,
-                                vessel_type=selected_vessel_types,
-                                commodity_level1=selected_level1,
-                                commodity_level2=selected_level2,
-                                commodity_level3=selected_level3,
-                                analysis_type="loading"
-                            )
-                        else:
-                            st.info("按国家分析的实现与按区域分析类似")
-                    else:
-                        st.warning("请先选择装货区域或国家")
-                
-                elif analysis_type == "卸货分析":
-                    # 选择卸货区域
-                    st.subheader("选择卸货区域进行分析")
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        use_discharge_zone = st.checkbox("按卸货区域分析", value=True)
-                        if use_discharge_zone:
-                            selected_for_analysis = selected_discharge_zones
-                            location_type = "discharge_zone"
-                    
-                    with col2:
-                        use_discharge_country = st.checkbox("按卸货国家分析")
-                        if use_discharge_country:
-                            selected_for_analysis = selected_discharge_countries
-                            location_type = "discharge_country"
-                    
-                    if (use_discharge_zone or use_discharge_country) and selected_for_analysis:
-                        if use_discharge_zone:
-                            create_trade_flow_charts(
-                                df,
-                                vessel_type=selected_vessel_types,
-                                commodity_level1=selected_level1,
-                                commodity_level2=selected_level2,
-                                commodity_level3=selected_level3,
-                                analysis_type="discharging"
-                            )
-                        else:
-                            st.info("按国家分析的实现与按区域分析类似")
-                    else:
-                        st.warning("请先选择卸货区域或国家")
-            
-            with analysis_tab2:
-                st.header("海运量时间变化分析")
-                
-                analysis_type = st.radio(
-                    "选择分析维度",
-                    ["装货分析", "卸货分析"],
-                    horizontal=True
-                )
-                
-                if analysis_type == "装货分析":
-                    location_type = st.selectbox(
-                        "选择位置类型",
-                        ["load_zone", "load_country"]
-                    )
-                    
-                    if location_type == "load_zone":
-                        selected_locations = selected_load_zones
-                    else:
-                        selected_locations = selected_load_countries
-                    
-                    create_time_series_charts(
-                        df,
-                        vessel_type=selected_vessel_types,
-                        commodity_level1=selected_level1,
-                        commodity_level2=selected_level2,
-                        commodity_level3=selected_level3,
-                        location_type=location_type,
-                        selected_locations=selected_locations,
-                        date_range=date_range
-                    )
-                
-                else:  # 卸货分析
-                    location_type = st.selectbox(
-                        "选择位置类型",
-                        ["discharge_zone", "discharge_country"]
-                    )
-                    
-                    if location_type == "discharge_zone":
-                        selected_locations = selected_discharge_zones
-                    else:
-                        selected_locations = selected_discharge_countries
-                    
-                    create_time_series_charts(
-                        df,
-                        vessel_type=selected_vessel_types,
-                        commodity_level1=selected_level1,
-                        commodity_level2=selected_level2,
-                        commodity_level3=selected_level3,
-                        location_type=location_type,
-                        selected_locations=selected_locations,
-                        date_range=date_range
-                    )
-            
-            with analysis_tab3:
-                st.header("季节性规律分析")
-                
-                analysis_type = st.selectbox(
-                    "选择分析类型",
-                    ["总体季节性", "按装货国家", "按卸货国家"]
-                )
-                
-                if analysis_type == "总体季节性":
-                    create_seasonal_charts(
-                        df,
-                        vessel_type=selected_vessel_types,
-                        commodity_level1=selected_level1,
-                        commodity_level2=selected_level2,
-                        commodity_level3=selected_level3,
-                        date_range=date_range
-                    )
-                
-                elif analysis_type == "按装货国家":
-                    if selected_load_countries:
-                        create_seasonal_charts(
-                            df,
-                            vessel_type=selected_vessel_types,
-                            commodity_level1=selected_level1,
-                            commodity_level2=selected_level2,
-                            commodity_level3=selected_level3,
-                            location_type="load_country",
-                            selected_locations=selected_load_countries,
-                            date_range=date_range
-                        )
-                    else:
-                        st.warning("请先在侧边栏选择装货国家")
-                
-                else:  # 按卸货国家
-                    if selected_discharge_countries:
-                        create_seasonal_charts(
-                            df,
-                            vessel_type=selected_vessel_types,
-                            commodity_level1=selected_level1,
-                            commodity_level2=selected_level2,
-                            commodity_level3=selected_level3,
-                            location_type="discharge_country",
-                            selected_locations=selected_discharge_countries,
-                            date_range=date_range
-                        )
-                    else:
-                        st.warning("请先在侧边栏选择卸货国家")
     
-    except Exception as e:
-        st.error(f"应用初始化失败: {str(e)}")
+    with tab1:
+        # 数据分析页面
+        st.header("数据分析仪表板")
+        
+        # 数据上传部分
+        st.subheader("数据上传")
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            uploaded_file = st.file_uploader(
+                "上传海运数据文件",
+                type=['csv', 'xlsx', 'xls', 'parquet'],
+                help="支持 CSV、Excel、Parquet 格式文件"
+            )
+        
+        with col2:
+            if uploaded_file is not None:
+                if st.button("🚀 加载数据", type="primary", use_container_width=True):
+                    with st.spinner("正在处理数据..."):
+                        # 处理上传的数据
+                        df = process_uploaded_data(
+                            uploaded_file, 
+                            st.session_state.commodity_mapping if 'commodity_mapping' in st.session_state else None
+                        )
+                        
+                        if df is not None:
+                            st.session_state.current_data = df
+                            st.session_state.data_loaded = True
+                            st.success("数据加载成功！")
+                            st.rerun()
+        
+        # 如果没有加载数据，显示提示
+        if not st.session_state.data_loaded or st.session_state.current_data is None:
+            st.info("请先上传数据文件进行分析")
+            return
+        
+        # 获取当前数据
+        df = st.session_state.current_data
+        
+        # 侧边栏 - 数据筛选
+        with st.sidebar:
+            st.header("数据概览")
+            st.write(f"总记录数: {len(df):,}")
+            
+            if 'load_end_date' in df.columns:
+                min_date = df['load_end_date'].min()
+                max_date = df['load_end_date'].max()
+                st.write(f"数据时间范围: {min_date.date()} 至 {max_date.date()}")
+            
+            st.write(f"船舶类型数量: {df['vessel_dwt_type'].nunique()}")
+            st.write(f"商品一级分类: {df['commodity_type_1level'].nunique()}")
+            
+            st.markdown("---")
+            st.header("筛选条件")
+            
+            # 船舶类型选择
+            vessel_options = sorted(df['vessel_dwt_type'].dropna().unique().tolist())
+            selected_vessel_types = st.multiselect(
+                "选择船舶类型",
+                options=vessel_options,
+                default=None,
+                help="可多选"
+            )
+            
+            # 商品分类选择（联动）
+            st.subheader("商品分类筛选")
+            
+            commodity_level1_options = sorted(df['commodity_type_1level'].dropna().unique().tolist())
+            selected_level1 = st.multiselect(
+                "商品一级分类",
+                options=commodity_level1_options,
+                default=None
+            )
+            
+            if selected_level1:
+                level2_options = sorted(df[df['commodity_type_1level'].isin(selected_level1)]['commodity_type_2level'].dropna().unique().tolist())
+                selected_level2 = st.multiselect(
+                    "商品二级分类",
+                    options=level2_options,
+                    default=None
+                )
+            else:
+                selected_level2 = None
+            
+            if selected_level2:
+                level3_options = sorted(df[df['commodity_type_2level'].isin(selected_level2)]['commodity_type_3level'].dropna().unique().tolist())
+                selected_level3 = st.multiselect(
+                    "商品三级分类",
+                    options=level3_options,
+                    default=None
+                )
+            else:
+                selected_level3 = None
+            
+            # 区域选择
+            st.subheader("区域选择")
+            
+            load_zone_options = sorted(df['load_zone'].dropna().unique().tolist())
+            discharge_zone_options = sorted(df['discharge_zone'].dropna().unique().tolist())
+            load_country_options = sorted(df['load_country'].dropna().unique().tolist())
+            discharge_country_options = sorted(df['discharge_country'].dropna().unique().tolist())
+            
+            selected_load_zones = st.multiselect(
+                "装货区域",
+                options=load_zone_options,
+                default=None
+            )
+            
+            selected_discharge_zones = st.multiselect(
+                "卸货区域",
+                options=discharge_zone_options,
+                default=None
+            )
+            
+            selected_load_countries = st.multiselect(
+                "装货国家",
+                options=load_country_options,
+                default=None
+            )
+            
+            selected_discharge_countries = st.multiselect(
+                "卸货国家",
+                options=discharge_country_options,
+                default=None
+            )
+            
+            # 时间范围选择
+            st.subheader("时间范围")
+            
+            if 'load_end_date' in df.columns:
+                min_date = df['load_end_date'].min()
+                max_date = df['load_end_date'].max()
+                
+                date_range = st.date_input(
+                    "选择时间范围",
+                    value=[min_date, max_date],
+                    min_value=min_date,
+                    max_value=max_date
+                )
+            else:
+                date_range = None
+            
+            st.markdown("---")
+            
+            # 手动刷新缓存按钮
+            if st.button("🔄 清除缓存并重新加载"):
+                st.cache_data.clear()
+                st.session_state.data_loaded = False
+                st.session_state.current_data = None
+                st.rerun()
+        
+        # 创建分析标签页
+        analysis_tab1, analysis_tab2, analysis_tab3 = st.tabs([
+            "📊 贸易流分析", 
+            "📈 时间序列分析", 
+            "🌊 季节性分析"
+        ])
+        
+        with analysis_tab1:
+            st.header("贸易流分析")
+            
+            analysis_type = st.radio(
+                "选择分析类型",
+                ["总体分析", "装货分析", "卸货分析"],
+                horizontal=True
+            )
+            
+            if analysis_type == "总体分析":
+                create_trade_flow_charts(
+                    df,
+                    vessel_type=selected_vessel_types,
+                    commodity_level1=selected_level1,
+                    commodity_level2=selected_level2,
+                    commodity_level3=selected_level3,
+                    analysis_type="overall"
+                )
+            elif analysis_type == "装货分析":
+                # 选择装货区域
+                st.subheader("选择装货区域进行分析")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    use_load_zone = st.checkbox("按装货区域分析", value=True)
+                    if use_load_zone:
+                        selected_for_analysis = selected_load_zones
+                        location_type = "load_zone"
+                
+                with col2:
+                    use_load_country = st.checkbox("按装货国家分析")
+                    if use_load_country:
+                        selected_for_analysis = selected_load_countries
+                        location_type = "load_country"
+                
+                if (use_load_zone or use_load_country) and selected_for_analysis:
+                    if use_load_zone:
+                        create_trade_flow_charts(
+                            df,
+                            vessel_type=selected_vessel_types,
+                            commodity_level1=selected_level1,
+                            commodity_level2=selected_level2,
+                            commodity_level3=selected_level3,
+                            analysis_type="loading"
+                        )
+                    else:
+                        st.info("按国家分析的实现与按区域分析类似")
+                else:
+                    st.warning("请先选择装货区域或国家")
+            
+            elif analysis_type == "卸货分析":
+                # 选择卸货区域
+                st.subheader("选择卸货区域进行分析")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    use_discharge_zone = st.checkbox("按卸货区域分析", value=True)
+                    if use_discharge_zone:
+                        selected_for_analysis = selected_discharge_zones
+                        location_type = "discharge_zone"
+                
+                with col2:
+                    use_discharge_country = st.checkbox("按卸货国家分析")
+                    if use_discharge_country:
+                        selected_for_analysis = selected_discharge_countries
+                        location_type = "discharge_country"
+                
+                if (use_discharge_zone or use_discharge_country) and selected_for_analysis:
+                    if use_discharge_zone:
+                        create_trade_flow_charts(
+                            df,
+                            vessel_type=selected_vessel_types,
+                            commodity_level1=selected_level1,
+                            commodity_level2=selected_level2,
+                            commodity_level3=selected_level3,
+                            analysis_type="discharging"
+                        )
+                    else:
+                        st.info("按国家分析的实现与按区域分析类似")
+                else:
+                    st.warning("请先选择卸货区域或国家")
+        
+        with analysis_tab2:
+            st.header("海运量时间变化分析")
+            
+            analysis_type = st.radio(
+                "选择分析维度",
+                ["装货分析", "卸货分析"],
+                horizontal=True
+            )
+            
+            if analysis_type == "装货分析":
+                location_type = st.selectbox(
+                    "选择位置类型",
+                    ["load_zone", "load_country"]
+                )
+                
+                if location_type == "load_zone":
+                    selected_locations = selected_load_zones
+                else:
+                    selected_locations = selected_load_countries
+                
+                fig = create_time_series_charts(
+                    df,
+                    vessel_type=selected_vessel_types,
+                    commodity_level1=selected_level1,
+                    commodity_level2=selected_level2,
+                    commodity_level3=selected_level3,
+                    location_type=location_type,
+                    selected_locations=selected_locations,
+                    date_range=date_range
+                )
+                
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            else:  # 卸货分析
+                location_type = st.selectbox(
+                    "选择位置类型",
+                    ["discharge_zone", "discharge_country"]
+                )
+                
+                if location_type == "discharge_zone":
+                    selected_locations = selected_discharge_zones
+                else:
+                    selected_locations = selected_discharge_countries
+                
+                fig = create_time_series_charts(
+                    df,
+                    vessel_type=selected_vessel_types,
+                    commodity_level1=selected_level1,
+                    commodity_level2=selected_level2,
+                    commodity_level3=selected_level3,
+                    location_type=location_type,
+                    selected_locations=selected_locations,
+                    date_range=date_range
+                )
+                
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True)
+        
+        with analysis_tab3:
+            st.header("季节性规律分析")
+            
+            analysis_type = st.selectbox(
+                "选择分析类型",
+                ["总体季节性", "按装货国家", "按卸货国家"]
+            )
+            
+            if analysis_type == "总体季节性":
+                fig = create_seasonal_charts(
+                    df,
+                    vessel_type=selected_vessel_types,
+                    commodity_level1=selected_level1,
+                    commodity_level2=selected_level2,
+                    commodity_level3=selected_level3,
+                    date_range=date_range
+                )
+                
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            elif analysis_type == "按装货国家":
+                if selected_load_countries:
+                    fig = create_seasonal_charts(
+                        df,
+                        vessel_type=selected_vessel_types,
+                        commodity_level1=selected_level1,
+                        commodity_level2=selected_level2,
+                        commodity_level3=selected_level3,
+                        location_type="load_country",
+                        selected_locations=selected_load_countries,
+                        date_range=date_range
+                    )
+                    
+                    if fig:
+                        st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("请先在侧边栏选择装货国家")
+            
+            else:  # 按卸货国家
+                if selected_discharge_countries:
+                    fig = create_seasonal_charts(
+                        df,
+                        vessel_type=selected_vessel_types,
+                        commodity_level1=selected_level1,
+                        commodity_level2=selected_level2,
+                        commodity_level3=selected_level3,
+                        location_type="discharge_country",
+                        selected_locations=selected_discharge_countries,
+                        date_range=date_range
+                    )
+                    
+                    if fig:
+                        st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("请先在侧边栏选择卸货国家")
 
 if __name__ == "__main__":
     main()
